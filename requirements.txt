@@ -1,0 +1,15 @@
+numpy
+matplotlib
+scikit-learn
+
+openai
+tiktoken
+
+python-dotenv
+urllib3
+requests
+
+pydantic
+pypdf
+
+cryptography

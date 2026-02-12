@@ -1,0 +1,178 @@
+:root {
+    --bg0: #fbfbfc;
+    --bg1: #f2f4f7;
+    --ink: #111827;
+    --muted: #4b5563;
+    --stroke2: rgba(17, 24, 39, 0.25);
+    --panel: rgba(255,255,255,0.82);
+    --panelStroke: rgba(17,24,39,0.12);
+    --on: #22c55e;
+    --off: #d1d5db;
+    --shadow2: rgba(17, 24, 39, 0.08);
+}
+
+html, body { height: 100%; }
+body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    color: var(--ink);
+    background: linear-gradient(180deg, var(--bg0), var(--bg1));
+    overflow: hidden;
+}
+
+#topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 14px;
+    background: var(--panel);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--panelStroke);
+    box-shadow: 0 6px 18px var(--shadow2);
+    user-select: none;
+}
+#title {
+    font-weight: 650;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+}
+#status {
+    color: var(--muted);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+#legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    display: inline-block;
+    border: 1px solid var(--stroke2);
+    box-shadow: 0 2px 8px var(--shadow2);
+}
+.dot.on { background: var(--on); }
+.dot.off { background: var(--off); }
+
+canvas { display: block; cursor: grab; }
+canvas.dragging { cursor: grabbing; }
+
+/* ---------------------------
+    Bottom activity panel (demo-friendly)
+---------------------------- */
+#logPanel {
+    position: fixed;
+    left: 14px;
+    right: 14px;
+    bottom: 12px;
+    height: 200px;
+
+    background: rgba(17,19,24,0.92);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 14px;
+    box-shadow: 0 18px 52px rgba(0,0,0,0.28);
+
+    display: flex;
+    flex-direction: column;
+    z-index: 20;
+    overflow: hidden;
+    transition: height 180ms ease;
+    user-select: text;
+    backdrop-filter: blur(10px);
+}
+
+#logPanel.reduced {
+    height: 44px;
+}
+#logPanel.reduced #logBody {
+    display: none;
+}
+
+.dotSmall {
+    display: inline-block;          /* IMPORTANT: makes width/height apply */
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(148,163,184,0.55);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.26);
+    flex: 0 0 auto;
+}
+.dotSmall.live { background: rgba(34,197,94,0.95); }
+.dotSmall.offline { background: rgba(248,113,113,0.95); }
+
+#logHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.84);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    font-family: ui-sans-serif, system-ui;
+    user-select: none;
+}
+
+#logHeader .left {
+    display: flex;
+    align-items: center;
+    gap: 8px;        /* space between dot / Activity / live / last */
+    min-width: 0;
+}
+
+.logTitle { color: rgba(255,255,255,0.90); }
+.logConn  { color: rgba(255,255,255,0.62); }
+.logLast  { color: rgba(255,255,255,0.78); }
+
+#logHeader button {
+    appearance: none;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.88);
+    padding: 6px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    cursor: pointer;
+}
+#logHeader button:hover { background: rgba(255,255,255,0.10); }
+
+#logBody {
+    flex: 1;
+    overflow: auto;
+    padding: 10px 12px 12px 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.35;
+    color: rgba(255,255,255,0.86);
+    background: rgba(0,0,0,0.22);
+}
+
+.logline {
+    padding: 8px 10px;
+    margin: 7px 0;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.06);
+    box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+    word-break: break-word;
+
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.lvl-ERROR   { border-color: rgba(248,113,113,0.42); }
+.lvl-WARNING { border-color: rgba(251,191,36,0.45); }
+.lvl-INFO    { border-color: rgba(59,130,246,0.40); }
+.lvl-DEBUG   { opacity: 0.82; }
