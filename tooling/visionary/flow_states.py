@@ -191,7 +191,7 @@ class _VizState:
 
 
 class _WebVizLogHandler(logging.Handler):
-    def __init__(self, viz: WebGraphVisualizer) -> None:
+    def __init__(self, viz: ClientFlowVisualizer) -> None:
         super().__init__()
         self._viz = viz
 
@@ -213,7 +213,7 @@ def _strip_ansi(s: str) -> str:
     return _ANSI_RE.sub("", s)
 
 
-class WebGraphVisualizer:
+class ClientFlowVisualizer:
     def __init__(self, *, title: str = "Summoner Graph", port: int = 8765) -> None:
         self.title = title
         self.port = port
