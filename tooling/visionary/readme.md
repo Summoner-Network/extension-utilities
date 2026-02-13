@@ -3,11 +3,11 @@
 > [!CAUTION]
 > **Development vs composed SDK import path**
 >
-> The repo `extension-utilities` hosting this extension contains a test script at `tests/test_visionary/agent.py` that imports **Visionary** as `tooling.visionary...`, along with a small `sys.path` insertion so it can run directly inside the extension-template layout.
+> The repo `extension-utilities` hosting this extension contains a test script at `tests/test_visionary/agent.py` that imports **Visionary** as `tooling.visionary`, along with a small `sys.path` insertion so it can run directly inside the extension-template layout.
 >
-> In a composed SDK, the same module is imported as `summoner.visionary...`, and no `sys.path` insertion is needed.
+> In a composed SDK, the same module is imported as `summoner.visionary`, and no `sys.path` insertion is needed.
 
-Visionary is a lightweight browser visualizer for **Summoner client flow graphs**. It is meant to make your client’s control structure visible while it runs by showing three things at the same time:
+**Visionary** is a lightweight browser visualizer for **Summoner client flow graphs**. It is meant to make your client’s control structure visible while it runs by showing three things at the same time:
 
 * The **static graph** extracted from `client.dna()`, meaning nodes and labeled arrows.
 * The **active snapshot** you provide at runtime, meaning a set of tokens that should be highlighted.
@@ -36,7 +36,7 @@ If you want to drive it interactively, start the InputAgent in another terminal 
 
 ### How Visionary works
 
-Visionary renders a graph and highlights tokens. It does not infer anything on its own.
+**Visionary** renders a graph and highlights tokens. It does not infer anything on its own.
 
 * The graph comes from your client’s DNA. If the DNA has no routes, there is nothing to draw.
 * Highlighting is based on string identity. If the token `"A"` is in your active list, node `A` lights up. If the token `"ab1"` is in your active list, the label pill `ab1` lights up.
@@ -172,7 +172,7 @@ async def bc1(msg: Any) -> Event:
     return Move(Trigger.ok) if wants(msg, "bc1") else Stay(Trigger.ok)
 ```
 
-Visionary does not try to interpret arrow glyphs itself. It uses the Summoner route parser you pass in `parse_route=client_flow.parse_route`, so the graph is extracted canonically from DNA and rendered in a single consistent visual style.
+**Visionary** does not try to interpret arrow glyphs itself. It uses the Summoner route parser you pass in `parse_route=client_flow.parse_route`, so the graph is extracted canonically from DNA and rendered in a single consistent visual style.
 
 ### Define receive and send routes
 
@@ -416,7 +416,7 @@ Final constraint: highlighting requires exact string identity after token string
 ## Troubleshooting
 
 * **Why is the canvas empty?**
-  The visualizer can only draw what exists in `client.dna()`. If you have not registered any `@client.receive(...)` handlers, `client.dna()` may represent an empty graph, so Visionary has nothing to render. Add a node-only route such as `route="A"` to confirm the pipeline end-to-end.
+  The visualizer can only draw what exists in `client.dna()`. If you have not registered any `@client.receive(...)` handlers, `client.dna()` may represent an empty graph, so **Visionary** has nothing to render. Add a node-only route such as `route="A"` to confirm the pipeline end-to-end.
 
 * **Why does the graph render but nothing lights up?**
   Highlighting is driven only by what you publish with `viz.push_states(...)`. Loading the graph does not imply any active state. Make sure you are calling `viz.push_states(...)` at runtime with tokens you expect to be active.

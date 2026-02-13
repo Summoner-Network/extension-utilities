@@ -6,7 +6,6 @@ test_server_config.json
 test_server.py
 tooling/pdf_tools/
 tooling/code_tools/
-tooling/curl_tools/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

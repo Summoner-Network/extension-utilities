@@ -159,7 +159,7 @@ __JS__
 """
 
 
-_ASSET_DIR = Path(__file__).with_name("web_viz_assets")
+_ASSET_DIR = Path(__file__).with_name("web_assets")
 
 
 def _read_text(p: Path) -> str:

@@ -17,7 +17,7 @@ target_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__fil
 if target_path not in sys.path:
     sys.path.insert(0, target_path)
 
-from tooling.llm_guardrails.gpt_cost import (
+from tooling.gpt_guardrails import (
     count_chat_tokens,
     estimate_chat_request_cost,
     actual_chat_request_cost,

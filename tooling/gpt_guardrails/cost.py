@@ -2,8 +2,6 @@ from typing import Optional, Any
 from dataclasses import dataclass
 import tiktoken
 
-
-
 def count_chat_tokens(
     messages: list[dict[str, str]],
     model: str = "gpt-4o",
