@@ -5,11 +5,8 @@ if target_path not in sys.path:
 
 import asyncio
 import pytest
-from dotenv import load_dotenv
 
 from tooling.curl_tools import CurlToolCompiler, SecretResolver, parse_curl_command
-
-load_dotenv()
 
 TWILIO_CURL = r"""
 curl 'https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/Messages.json' -X POST \
