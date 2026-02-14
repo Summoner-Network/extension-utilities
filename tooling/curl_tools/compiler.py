@@ -10,6 +10,7 @@ import shlex
 import time
 import asyncio
 from dataclasses import dataclass, field
+import dataclasses
 from typing import Any, Optional, Type, Literal, Callable, Mapping, Union, Tuple, List, Dict
 
 from urllib.parse import parse_qsl
@@ -149,6 +150,68 @@ def _normalize_params(params: Mapping[str, Any]) -> dict[str, str]:
     return out
 
 
+def _json_safe(x: Any) -> Any:
+    """
+    Convert arbitrary python objects into JSON-serializable structures.
+    Keeps your {{env:...}} / {{var}} placeholders intact.
+    """
+    if x is None or isinstance(x, (str, int, float, bool)):
+        return x
+
+    # tuples are common for form bodies; JSON needs lists
+    if isinstance(x, tuple):
+        return [_json_safe(v) for v in x]
+
+    if isinstance(x, list):
+        return [_json_safe(v) for v in x]
+
+    if isinstance(x, dict):
+        return {str(k): _json_safe(v) for k, v in x.items()}
+
+    # pydantic models (rare in bodies, but safe)
+    if isinstance(x, BaseModel):
+        return _json_safe(x.model_dump())
+
+    # dataclasses (BasicAuthSpec, etc.)
+    if dataclasses.is_dataclass(x):
+        d = dataclasses.asdict(x)
+        return _json_safe(d)
+
+    # fallback: stringify
+    return str(x)
+
+
+def _rehydrate_form_body(body: Any) -> Any:
+    """
+    request_schema() / HttpTool.call() expects FORM bodies as:
+      - dict, or
+      - list[tuple[str,str]], or
+      - raw string "a=1&b=2"
+    If we loaded JSON, tuples became lists; fix that here.
+    """
+    if body is None:
+        return None
+
+    if isinstance(body, list):
+        out: list[tuple[str, str]] = []
+        for it in body:
+            # stored as ["k","v"]
+            if isinstance(it, list) and len(it) == 2:
+                out.append((str(it[0]), str(it[1])))
+                continue
+            # allow {"key": "...", "value": "..."} as well
+            if isinstance(it, dict) and "key" in it and "value" in it:
+                out.append((str(it["key"]), str(it["value"])))
+                continue
+            # if it's already a tuple, keep it
+            if isinstance(it, tuple) and len(it) == 2:
+                out.append((str(it[0]), str(it[1])))
+                continue
+        return out
+
+    return body
+
+
 # ----------------------------
 # Request spec + tool
 # ----------------------------
@@ -179,6 +242,58 @@ class HttpRequestSpec:
     input_model: Optional[Type[BaseModel]] = None
     output_model: Optional[Type[BaseModel]] = None
 
+    def to_request_schema_kwargs(self) -> dict[str, Any]:
+        """
+        Python-native kwargs for compiler.request_schema(**kwargs).
+        Not necessarily JSON-serializable (e.g. tuples, BasicAuthSpec).
+        """
+        return {
+            "method": self.method,
+            "url": self.url,
+            "headers": dict(self.headers or {}),
+            "params": dict(self.params or {}),
+            "body": self.body,
+            "body_mode": self.body_mode,
+            "auth": self.auth,
+            "timeout_s": self.timeout_s,
+            "follow_redirects": self.follow_redirects,
+            "verify_tls": self.verify_tls,
+            "description": self.description,
+            "input_model": self.input_model,
+            "output_model": self.output_model,
+        }
+
+    def to_dict(self, *, include_models: bool = False) -> dict[str, Any]:
+        """
+        JSON-safe dict you can persist and later rehydrate deterministically.
+        Models are omitted by default because they are not robust to serialize.
+        """
+        d: dict[str, Any] = {
+            "method": self.method,
+            "url": self.url,
+            "headers": _json_safe(self.headers or {}),
+            "params": _json_safe(self.params or {}),
+            "body": _json_safe(self.body),
+            "body_mode": self.body_mode,
+            "auth": _json_safe(self.auth) if self.auth is not None else None,
+            "timeout_s": self.timeout_s,
+            "follow_redirects": self.follow_redirects,
+            "verify_tls": self.verify_tls,
+            "description": self.description,
+        }
+
+        if include_models:
+            # best-effort: store import path; you can extend rehydration if you want
+            def _qualname(tp: Optional[Type[Any]]) -> Optional[str]:
+                if tp is None:
+                    return None
+                return f"{tp.__module__}:{tp.__qualname__}"
+
+            d["input_model"] = _qualname(self.input_model)
+            d["output_model"] = _qualname(self.output_model)
+
+        return d
+
 
 @dataclass
 class ToolCallReport:
@@ -206,6 +321,12 @@ class HttpTool:
     def __init__(self, spec: HttpRequestSpec, secrets: Optional[SecretResolver] = None):
         self.spec = spec
         self.secrets = secrets or SecretResolver()
+
+    def to_dict(self, *, include_models: bool = False) -> dict[str, Any]:
+        """
+        Persistable snapshot of the tool spec (JSON-safe).
+        """
+        return self.spec.to_dict(include_models=include_models)
 
     async def call(self, inputs: Optional[dict[str, Any]] = None) -> ToolCallReport:
         inputs = dict(inputs or {})
@@ -806,6 +927,36 @@ class CurlToolCompiler:
             output_model=output_model,
         )
         return HttpTool(spec, secrets=self.secrets)
+
+    def request_schema_from_dict(self, d: Mapping[str, Any]) -> HttpTool:
+        """
+        Deterministically rehydrate a tool spec produced by HttpTool.to_dict().
+        """
+        dd = dict(d)
+
+        auth = dd.get("auth")
+        auth_spec: Optional[BasicAuthSpec] = None
+        if isinstance(auth, dict) and auth.get("username") is not None and auth.get("password") is not None:
+            auth_spec = BasicAuthSpec(username=str(auth["username"]), password=str(auth["password"]))
+
+        body_mode = dd.get("body_mode", "json")
+        body = dd.get("body", None)
+        if body_mode == "form":
+            body = _rehydrate_form_body(body)
+
+        return self.request_schema(
+            method=dd["method"],
+            url=dd["url"],
+            headers=dd.get("headers") or {},
+            params=dd.get("params") or {},
+            body=body,
+            body_mode=body_mode,
+            auth=auth_spec,
+            timeout_s=dd.get("timeout_s", 30.0),
+            follow_redirects=bool(dd.get("follow_redirects", False)),
+            verify_tls=bool(dd.get("verify_tls", True)),
+            description=dd.get("description"),
+        )
 
     async def gpt_parse(
         self,
