@@ -1,6 +1,9 @@
 import json
 import os
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv()  # <-- ensure OPENAI_API_KEY is loaded from .env before skipif
 
 
 HEYREACH_DOCS = r"""

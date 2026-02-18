@@ -8,7 +8,6 @@ import re
 import json
 import shlex
 import time
-import asyncio
 from dataclasses import dataclass, field
 import dataclasses
 from typing import Any, Optional, Type, Literal, Callable, Mapping, Union, Tuple, List, Dict
@@ -31,7 +30,6 @@ from tooling.gpt_guardrails import (
     actual_chat_request_cost,
     get_usage_from_response,
 )
-
 
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 BodyMode = Literal["json", "form", "raw"]
@@ -129,6 +127,8 @@ def _render_template_any(
         return [_render_template_any(x, inputs=inputs, secrets=secrets) for x in obj]
     if isinstance(obj, dict):
         return {str(k): _render_template_any(v, inputs=inputs, secrets=secrets) for k, v in obj.items()}
+    if isinstance(obj, tuple):
+        return tuple(_render_template_any(x, inputs=inputs, secrets=secrets) for x in obj)
     return obj
 
 
@@ -488,10 +488,16 @@ def _convert_shell_env_to_placeholder(s: str) -> str:
     Converts $VARNAME or ${VARNAME} to {{env:VARNAME}}.
     Leaves escaped dollars intact: "\\$FOO" stays "$FOO".
     """
+    sentinel = "__CURLTOOLS_ESCAPED_DOLLAR__"
+    s = s.replace("\\$", sentinel)
+
     def sub(m: re.Match) -> str:
         name = m.group(2)
         return f"{{{{env:{name}}}}}"
-    return _DOLLAR_ENV_RE.sub(sub, s)
+
+    s = _DOLLAR_ENV_RE.sub(sub, s)
+    s = s.replace(sentinel, "$")
+    return s
 
 
 def _parse_header_kv(h: str) -> tuple[str, str]:
@@ -1106,30 +1112,3 @@ class CurlToolCompiler:
             f"{docs}\n"
         )
 
-
-# ----------------------------
-# Example usage
-# ----------------------------
-
-if __name__ == "__main__":
-    compiler = CurlToolCompiler(
-        secrets=SecretResolver(auto_dotenv=True),
-        max_chat_input_tokens=600,
-        max_chat_output_tokens=1200,
-        default_cost_limit=None,
-    )
-
-    curl_text = r'''
-    curl -X POST "https://api.example.com/v1/items" \
-      -H "Authorization: Bearer $API_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d '{"name":"{{name}}","count":"{{count}}"}'
-    '''
-
-    tool = compiler.parse(curl_text, description="Create an item")
-
-    async def run():
-        report = await tool.call({"name": "abc", "count": 2})
-        print(report)
-
-    asyncio.run(run())

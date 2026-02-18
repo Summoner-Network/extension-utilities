@@ -1,5 +1,3 @@
-# tests/test_curl_tools/test_hubspot_integration_readonly.py
-
 import os
 import pytest
 from dotenv import load_dotenv
