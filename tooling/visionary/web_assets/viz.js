@@ -159,6 +159,27 @@ function screenToWorld(sx, sy) {
   };
 }
 
+function hash32(str) {
+  // FNV-1a 32-bit
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+// Deterministic tiny offset in [-1,1]^2 from a seed
+function jitter2(seedStr) {
+  const h = hash32(seedStr);
+  // two 16-bit lanes -> [0,1)
+  const a = ((h & 0xffff) / 65535);
+  const b = (((h >>> 16) & 0xffff) / 65535);
+  // map to [-1,1]
+  return { x: a * 2 - 1, y: b * 2 - 1 };
+}
+
+
 /* ---------------------------
    Dimension inference (generic, any height)
 ---------------------------- */
@@ -868,6 +889,22 @@ function layoutAll() {
           if (!p) continue;
           p.x = r.cx - (p.x - r.cx);
         }
+      }
+    }
+
+    // --- deterministic micro-jitter to break colinearity (stable across renders) ---
+    {
+      const s = VIEW.scale;
+      // scale jitter with available space but keep it visually tiny
+      // (screen-stable-ish because we divide by s)
+      const jBase = Math.max(0.6, Math.min(2.2, r.width * 0.0012)) / s;
+
+      for (const n of (LAYER[k].nodes || [])) {
+        const p = pos[k][n];
+        if (!p) continue;
+        const j = jitter2(`${k}\u0000${n}`);
+        p.x += j.x * jBase;
+        p.y += j.y * jBase;
       }
     }
 
