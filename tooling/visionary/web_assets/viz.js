@@ -908,6 +908,63 @@ function layoutAll() {
       }
     }
 
+    // --- extra nudge when three nodes are nearly colinear ---
+    {
+      const nodes = LAYER[k].nodes || [];
+      if (nodes.length >= 3) {
+        const s = VIEW.scale;
+        const eps = 1e-6;
+        const thresh = 0.0025; // smaller = stricter colinearity detection
+        const push = (1.2 / s); // small push in world units
+
+        // sample pairs to keep it cheap on large layers
+        const maxChecks = Math.min(2400, nodes.length * 24);
+        let checks = 0;
+
+        for (let i = 0; i < nodes.length && checks < maxChecks; i++) {
+          const a = nodes[i];
+          const pa = pos[k][a];
+          if (!pa) continue;
+
+          // deterministic stride sampling
+          for (let t = 1; t <= 12 && checks < maxChecks; t++) {
+            const j = (i + t * 17) % nodes.length;
+            const b = nodes[j];
+            const pb = pos[k][b];
+            if (!pb || b === a) continue;
+
+            const abx = pb.x - pa.x;
+            const aby = pb.y - pa.y;
+            const ab2 = abx*abx + aby*aby + eps;
+
+            // pick a third point
+            const c = nodes[(i + t * 29) % nodes.length];
+            const pc = pos[k][c];
+            if (!pc || c === a || c === b) continue;
+
+            // area2 = cross(AB, AC)
+            const acx = pc.x - pa.x;
+            const acy = pc.y - pa.y;
+            const area2 = abx*acy - aby*acx;
+
+            // normalized distance from line AB (scaled by |AB|)
+            const rel = Math.abs(area2) / Math.sqrt(ab2);
+
+            if (rel < thresh) {
+              // push C a tiny amount along the normal to AB
+              const inv = 1 / Math.sqrt(ab2);
+              const nx = (aby * inv);
+              const ny = (-abx * inv);
+              pc.x += nx * push;
+              pc.y += ny * push;
+            }
+            checks++;
+          }
+        }
+      }
+    }
+
+
     // Auto-fit within the layer frame.
     // We fit node centers plus a conservative margin that accounts for:
     //   - node radius
