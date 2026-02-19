@@ -119,6 +119,7 @@ function hypot(dx, dy) { return Math.sqrt(dx*dx + dy*dy); }
 function hash32(str) {
   // FNV-1a 32-bit
   let h = 2166136261 >>> 0;
+  str = String(str);
   for (let i = 0; i < str.length; i++) {
     h ^= str.charCodeAt(i);
     h = Math.imul(h, 16777619);
@@ -126,11 +127,68 @@ function hash32(str) {
   return h >>> 0;
 }
 
-function jitter2(seedStr) {
-  const h = hash32(seedStr);
-  const a = (h & 0xffff) / 65535;            // [0,1]
-  const b = ((h >>> 16) & 0xffff) / 65535;   // [0,1]
-  return { x: a * 2 - 1, y: b * 2 - 1 };     // [-1,1]
+function angleFromKey(key) {
+  // stable angle in [0, 2π)
+  const h = hash32(key);
+  return (h / 4294967296) * (2 * Math.PI);
+}
+
+function farthestPair(placed) {
+  // placed: Map(node -> {x,y})
+  const keys = Array.from(placed.keys());
+  if (keys.length === 0) return [null, null];
+  if (keys.length === 1) return [keys[0], keys[0]];
+
+  let bestA = keys[0], bestB = keys[1];
+  let bestD2 = -1;
+
+  for (let i = 0; i < keys.length; i++) {
+    const ai = keys[i];
+    const pa = placed.get(ai);
+    for (let j = i + 1; j < keys.length; j++) {
+      const bj = keys[j];
+      const pb = placed.get(bj);
+      const dx = pb.x - pa.x;
+      const dy = pb.y - pa.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > bestD2) {
+        bestD2 = d2;
+        bestA = ai;
+        bestB = bj;
+      }
+    }
+  }
+  return [bestA, bestB];
+}
+
+function normalizeToBox(pos, box = 0.90) {
+  // pos: { node -> {x,y} } in arbitrary coords, normalize to roughly [-box, box]
+  const keys = Object.keys(pos);
+  if (keys.length === 0) return pos;
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const k of keys) {
+    const p = pos[k];
+    if (!p) continue;
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const spanX = Math.max(1e-6, maxX - minX);
+  const spanY = Math.max(1e-6, maxY - minY);
+  const s = box / Math.max(spanX, spanY);
+
+  for (const k of keys) {
+    pos[k].x = (pos[k].x - cx) * s;
+    pos[k].y = (pos[k].y - cy) * s;
+    pos[k].x = clamp(pos[k].x, -0.98, 0.98);
+    pos[k].y = clamp(pos[k].y, -0.98, 0.98);
+  }
+  return pos;
 }
 
 function unit(dx, dy) {
@@ -371,106 +429,132 @@ function computeLayerMeta() {
 ---------------------------- */
 
 function frLayout(nodes, edges) {
+  // New algorithm: farthest-pair diameter circle placement
   const n = nodes.length;
   const pos = {};
   if (n === 0) return pos;
 
-  for (let i = 0; i < n; i++) {
-    const th = (2*Math.PI*i)/n;
-    pos[nodes[i]] = { x: Math.cos(th)*0.75, y: Math.sin(th)*0.75 };
-  }
-
-  const idx = new Map();
-  for (let i = 0; i < n; i++) idx.set(nodes[i], i);
-
-  const adj = [];
-  const adjSeen = new Set();
+  // --- build undirected adjacency for degree + neighbor centroid
+  const neigh = new Map();
+  for (const v of nodes) neigh.set(String(v), new Set());
 
   for (const e of edges) {
     const s = String(e.source), t = String(e.target);
-    if (!idx.has(s) || !idx.has(t) || s === t) continue;
-
-    // For layout, direction usually doesn't matter; use undirected key
-    const a = s < t ? s : t;
-    const b = s < t ? t : s;
-    const key = a + "<->" + b;
-
-    if (adjSeen.has(key)) continue;
-    adjSeen.add(key);
-
-    adj.push([s, t]);
+    if (!neigh.has(s) || !neigh.has(t) || s === t) continue;
+    neigh.get(s).add(t);
+    neigh.get(t).add(s);
   }
 
-  const area = 4.0;
-  const k = Math.sqrt(area / Math.max(1, n));
-  let temp = 0.35;
+  function degree(v) { return (neigh.get(v) ? neigh.get(v).size : 0); }
 
-  const pairCap = (n <= 220);
-  const iters = Math.min(220, 80 + n * 2);
+  // stable node order: degree desc, then label
+  const order = nodes.map(String).slice().sort((a, b) => {
+    const da = degree(a), db = degree(b);
+    if (db !== da) return db - da;
+    return a.localeCompare(b);
+  });
 
-  for (let it = 0; it < iters; it++) {
-    const disp = {};
-    for (const v of nodes) disp[v] = { x: 0, y: 0 };
+  const placed = new Map();
 
-    if (pairCap) {
-      for (let i = 0; i < n; i++) {
-        const v = nodes[i];
-        for (let j = i + 1; j < n; j++) {
-          const u = nodes[j];
-          const dx = pos[v].x - pos[u].x;
-          const dy = pos[v].y - pos[u].y;
-          const dist = Math.max(1e-4, Math.sqrt(dx*dx + dy*dy));
-          const force = (k*k) / dist;
-          const fx = (dx / dist) * force;
-          const fy = (dy / dist) * force;
-          disp[v].x += fx; disp[v].y += fy;
-          disp[u].x -= fx; disp[u].y -= fy;
-        }
+  function put(v, x, y) {
+    placed.set(v, { x, y });
+    pos[v] = { x, y };
+  }
+
+  // seed placements
+  put(order[0], 0.0, 0.0);
+  if (n >= 2) {
+    // put second at fixed offset so the first diameter exists
+    put(order[1], 1.0, 0.0);
+  }
+
+  // distance-to-nearest already placed node (squared)
+  function minDist2ToPlaced(x, y) {
+    let best = Infinity;
+    for (const p of placed.values()) {
+      const dx = x - p.x, dy = y - p.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < best) best = d2;
+    }
+    return best;
+  }
+
+  for (let idx = 2; idx < n; idx++) {
+    const v = order[idx];
+
+    const [a, b] = farthestPair(placed);
+    const pa = placed.get(a);
+    const pb = placed.get(b);
+
+    // circle with diameter AB
+    const cx = (pa.x + pb.x) / 2;
+    const cy = (pa.y + pb.y) / 2;
+    let r = Math.hypot(pb.x - pa.x, pb.y - pa.y) / 2;
+    r = Math.max(r, 0.35); // avoid degenerate tiny circles early
+
+    // neighbor centroid among already placed neighbors
+    const ns = Array.from(neigh.get(v) || []).filter(u => placed.has(u));
+    let target = null;
+    if (ns.length > 0) {
+      let sx = 0, sy = 0;
+      for (const u of ns) {
+        const pu = placed.get(u);
+        sx += pu.x; sy += pu.y;
       }
+      target = { x: sx / ns.length, y: sy / ns.length };
+    }
+
+    // preferred direction
+    let baseAng;
+    if (target) {
+      const vx = target.x - cx;
+      const vy = target.y - cy;
+      const L = Math.hypot(vx, vy);
+      baseAng = (L > 1e-6) ? Math.atan2(vy, vx) : angleFromKey("fallback\0" + v);
     } else {
-      const sample = Math.min(180, n);
-      for (let i = 0; i < n; i++) {
-        const v = nodes[i];
-        for (let s = 0; s < sample; s++) {
-          const j = (i*17 + s*29) % n;
-          if (j === i) continue;
-          const u = nodes[j];
-          const dx = pos[v].x - pos[u].x;
-          const dy = pos[v].y - pos[u].y;
-          const dist = Math.max(1e-4, Math.sqrt(dx*dx + dy*dy));
-          const force = (k*k) / dist;
-          disp[v].x += (dx / dist) * force;
-          disp[v].y += (dy / dist) * force;
-        }
+      baseAng = angleFromKey("node\0" + v);
+    }
+
+    // try candidate points on the circle
+    // we search around baseAng in increasing offsets, choose best clearance,
+    // with mild attraction if we have a target.
+    let best = null;
+    let bestScore = -Infinity;
+
+    const step = Math.PI / 12;     // 15 degrees
+    const tries = 16;              // 16 candidates around base angle
+    const wAttr = target ? 0.18 : 0.0; // attraction weight
+
+    for (let t = 0; t < tries; t++) {
+      const off = (t === 0) ? 0 : (Math.ceil(t / 2) * step) * (t % 2 ? +1 : -1);
+      const ang = baseAng + off;
+
+      const x = cx + r * Math.cos(ang);
+      const y = cy + r * Math.sin(ang);
+
+      const sep = minDist2ToPlaced(x, y);
+
+      let attr = 0;
+      if (target) {
+        const dx = x - target.x, dy = y - target.y;
+        attr = dx * dx + dy * dy;
+      }
+
+      const score = sep - wAttr * attr;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y };
       }
     }
 
-    for (const [s, t] of adj) {
-      const dx = pos[s].x - pos[t].x;
-      const dy = pos[s].y - pos[t].y;
-      const dist = Math.max(1e-4, Math.sqrt(dx*dx + dy*dy));
-      const force = (dist*dist) / k;
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
-      disp[s].x -= fx; disp[s].y -= fy;
-      disp[t].x += fx; disp[t].y += fy;
-    }
+    // fallback if something went wrong
+    if (!best) best = { x: cx + r, y: cy };
 
-    for (const v of nodes) {
-      const dx = disp[v].x;
-      const dy = disp[v].y;
-      const d = Math.max(1e-4, Math.sqrt(dx*dx + dy*dy));
-      const step = Math.min(d, temp);
-      pos[v].x += (dx / d) * step;
-      pos[v].y += (dy / d) * step;
-      pos[v].x = clamp(pos[v].x, -0.98, 0.98);
-      pos[v].y = clamp(pos[v].y, -0.98, 0.98);
-    }
-
-    temp *= 0.985;
-    if (temp < 0.02) break;
+    put(v, best.x, best.y);
   }
 
+  // normalize to your expected [-1,1] box for downstream scaling
+  normalizeToBox(pos, 0.85);
   return pos;
 }
 
@@ -944,30 +1028,6 @@ function layoutAll() {
         }
       }
     }
-
-    // deterministic post-fit jitter (big enough to survive snapping)
-    // keeps nodes in "general position" so they do not line up perfectly.
-    {
-      const s = VIEW.scale;
-      const nodeR = 26 / s;
-      const amp = 10 / s; // ~10px at s=1, intentionally not tiny
-      const margin = nodeR + (4 / s);
-      const bandBot = bandTop + bandH;
-
-      for (const n of (LAYER[k].nodes || [])) {
-        const p = pos[k][n];
-        if (!p) continue;
-
-        const j = jitter2(`${k}\u0000${n}`);
-        p.x += j.x * amp;
-        p.y += j.y * amp;
-
-        // keep circles inside the band (prevents clipping)
-        p.x = clamp(p.x, r.left + margin, r.right - margin);
-        p.y = clamp(p.y, bandTop + margin, bandBot - margin);
-      }
-    }
-
   }
 
   return { pos, rects, topPad, bottomPad };
@@ -1086,8 +1146,7 @@ function render() {
     };
 
     // edges + labels
-    for (let ei = 0; ei < edges.length; ei++) {
-      const e = edges[ei];
+    for (const e of edges) {
       const pS = pos[String(e.source)];
       const pT = pos[String(e.target)];
       if (!pS || !pT) continue;
@@ -1123,20 +1182,10 @@ function render() {
 
       // Match the other tool’s feel: 34px step in screen space
       const spread = 34 / VIEW.scale;
-
-      // NEW: even singleton edges get a tiny deterministic bend
-      let curve = edgeJ * spread;
-      if (Math.abs(curve) < 1e-9) {
-        // stable per edge+layer, so it does not "swim"
-        const h = hash32(stableEdgeKey(e, ei) + "\u0000" + String(k));
-        const sign = (h & 1) ? 1 : -1;
-        const mag = 0.35 + ((h >>> 1) % 1000) / 1000 * 0.65; // [0.35, 1.0]
-        curve = sign * (14 / VIEW.scale) * mag;              // ~5..14 px at s=1
-      }
+      const curve = edgeJ * spread;
 
       const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
       let ctrl = { x: mid.x + nLane.x * curve, y: mid.y + nLane.y * curve };
-
 
       start = snapPt(start);
       end   = snapPt(end);
