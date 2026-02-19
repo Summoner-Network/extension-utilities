@@ -26,7 +26,9 @@ def compiler() -> CurlToolCompiler:
     )
 
 @pytest.fixture(scope="session")
-def has_twilio_env() -> bool:
+def has_env() -> bool:
     # Used for optional integration test
-    needed = ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"]
+    needed = ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER",
+              "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+              "HEYREACH_API_KEY", "HUBSPOT_ACCESS_TOKEN"]
     return all(os.getenv(k) for k in needed)
