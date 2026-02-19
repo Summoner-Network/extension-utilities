@@ -116,6 +116,23 @@ resize();
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 function hypot(dx, dy) { return Math.sqrt(dx*dx + dy*dy); }
 
+function hash32(str) {
+  // FNV-1a 32-bit
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function jitter2(seedStr) {
+  const h = hash32(seedStr);
+  const a = (h & 0xffff) / 65535;            // [0,1]
+  const b = ((h >>> 16) & 0xffff) / 65535;   // [0,1]
+  return { x: a * 2 - 1, y: b * 2 - 1 };     // [-1,1]
+}
+
 function unit(dx, dy) {
   const len = hypot(dx, dy) || 1;
   return { x: dx / len, y: dy / len, len };
@@ -158,27 +175,6 @@ function screenToWorld(sx, sy) {
     y: (sy - VIEW.ty) / VIEW.scale
   };
 }
-
-function hash32(str) {
-  // FNV-1a 32-bit
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-// Deterministic tiny offset in [-1,1]^2 from a seed
-function jitter2(seedStr) {
-  const h = hash32(seedStr);
-  // two 16-bit lanes -> [0,1)
-  const a = ((h & 0xffff) / 65535);
-  const b = (((h >>> 16) & 0xffff) / 65535);
-  // map to [-1,1]
-  return { x: a * 2 - 1, y: b * 2 - 1 };
-}
-
 
 /* ---------------------------
    Dimension inference (generic, any height)
@@ -892,79 +888,6 @@ function layoutAll() {
       }
     }
 
-    // --- deterministic micro-jitter to break colinearity (stable across renders) ---
-    {
-      const s = VIEW.scale;
-      // scale jitter with available space but keep it visually tiny
-      // (screen-stable-ish because we divide by s)
-      const jBase = Math.max(0.6, Math.min(2.2, r.width * 0.0012)) / s;
-
-      for (const n of (LAYER[k].nodes || [])) {
-        const p = pos[k][n];
-        if (!p) continue;
-        const j = jitter2(`${k}\u0000${n}`);
-        p.x += j.x * jBase;
-        p.y += j.y * jBase;
-      }
-    }
-
-    // --- extra nudge when three nodes are nearly colinear ---
-    {
-      const nodes = LAYER[k].nodes || [];
-      if (nodes.length >= 3) {
-        const s = VIEW.scale;
-        const eps = 1e-6;
-        const thresh = 0.0025; // smaller = stricter colinearity detection
-        const push = (1.2 / s); // small push in world units
-
-        // sample pairs to keep it cheap on large layers
-        const maxChecks = Math.min(2400, nodes.length * 24);
-        let checks = 0;
-
-        for (let i = 0; i < nodes.length && checks < maxChecks; i++) {
-          const a = nodes[i];
-          const pa = pos[k][a];
-          if (!pa) continue;
-
-          // deterministic stride sampling
-          for (let t = 1; t <= 12 && checks < maxChecks; t++) {
-            const j = (i + t * 17) % nodes.length;
-            const b = nodes[j];
-            const pb = pos[k][b];
-            if (!pb || b === a) continue;
-
-            const abx = pb.x - pa.x;
-            const aby = pb.y - pa.y;
-            const ab2 = abx*abx + aby*aby + eps;
-
-            // pick a third point
-            const c = nodes[(i + t * 29) % nodes.length];
-            const pc = pos[k][c];
-            if (!pc || c === a || c === b) continue;
-
-            // area2 = cross(AB, AC)
-            const acx = pc.x - pa.x;
-            const acy = pc.y - pa.y;
-            const area2 = abx*acy - aby*acx;
-
-            // normalized distance from line AB (scaled by |AB|)
-            const rel = Math.abs(area2) / Math.sqrt(ab2);
-
-            if (rel < thresh) {
-              // push C a tiny amount along the normal to AB
-              const inv = 1 / Math.sqrt(ab2);
-              const nx = (aby * inv);
-              const ny = (-abx * inv);
-              pc.x += nx * push;
-              pc.y += ny * push;
-            }
-            checks++;
-          }
-        }
-      }
-    }
-
-
     // Auto-fit within the layer frame.
     // We fit node centers plus a conservative margin that accounts for:
     //   - node radius
@@ -1021,6 +944,30 @@ function layoutAll() {
         }
       }
     }
+
+    // deterministic post-fit jitter (big enough to survive snapping)
+    // keeps nodes in "general position" so they do not line up perfectly.
+    {
+      const s = VIEW.scale;
+      const nodeR = 26 / s;
+      const amp = 10 / s; // ~10px at s=1, intentionally not tiny
+      const margin = nodeR + (4 / s);
+      const bandBot = bandTop + bandH;
+
+      for (const n of (LAYER[k].nodes || [])) {
+        const p = pos[k][n];
+        if (!p) continue;
+
+        const j = jitter2(`${k}\u0000${n}`);
+        p.x += j.x * amp;
+        p.y += j.y * amp;
+
+        // keep circles inside the band (prevents clipping)
+        p.x = clamp(p.x, r.left + margin, r.right - margin);
+        p.y = clamp(p.y, bandTop + margin, bandBot - margin);
+      }
+    }
+
   }
 
   return { pos, rects, topPad, bottomPad };
@@ -1139,7 +1086,8 @@ function render() {
     };
 
     // edges + labels
-    for (const e of edges) {
+    for (let ei = 0; ei < edges.length; ei++) {
+      const e = edges[ei];
       const pS = pos[String(e.source)];
       const pT = pos[String(e.target)];
       if (!pS || !pT) continue;
@@ -1175,10 +1123,20 @@ function render() {
 
       // Match the other tool’s feel: 34px step in screen space
       const spread = 34 / VIEW.scale;
-      const curve = edgeJ * spread;
+
+      // NEW: even singleton edges get a tiny deterministic bend
+      let curve = edgeJ * spread;
+      if (Math.abs(curve) < 1e-9) {
+        // stable per edge+layer, so it does not "swim"
+        const h = hash32(stableEdgeKey(e, ei) + "\u0000" + String(k));
+        const sign = (h & 1) ? 1 : -1;
+        const mag = 0.35 + ((h >>> 1) % 1000) / 1000 * 0.65; // [0.35, 1.0]
+        curve = sign * (14 / VIEW.scale) * mag;              // ~5..14 px at s=1
+      }
 
       const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
       let ctrl = { x: mid.x + nLane.x * curve, y: mid.y + nLane.y * curve };
+
 
       start = snapPt(start);
       end   = snapPt(end);
