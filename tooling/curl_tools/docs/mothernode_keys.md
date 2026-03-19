@@ -3,7 +3,7 @@
 *Reference: [https://support.mothernode.com/knowledge-base/api-key/](https://support.mothernode.com/knowledge-base/api-key/)*
 
 
-Mothernode CRM users who wish to connect with third-party services via API can do so using one of Mothernode’s API keys. API keys are generated at the user level and can be managed by Admins in the user’s account.
+Mothernode CRM users who wish to connect with third-party services via API can do so using one of Mothernode's API keys. API keys are generated at the user level and can be managed by Admins in the user's account.
 
 1. Go to `Adminitration>User Account>Permissions`
 2. Click the Administration Tab

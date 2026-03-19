@@ -7,7 +7,7 @@
 >
 > In a composed SDK, the same module is imported as `summoner.visionary`, and no `sys.path` insertion is needed.
 
-**Visionary** is a lightweight browser visualizer for **Summoner client flow graphs**. It is meant to make your client’s control structure visible while it runs by showing three things at the same time:
+**Visionary** is a lightweight browser visualizer for **Summoner client flow graphs**. It is meant to make your client's control structure visible while it runs by showing three things at the same time:
 
 * The **static graph** extracted from `client.dna()`, meaning nodes and labeled arrows.
 * The **active snapshot** you provide at runtime, meaning a set of tokens that should be highlighted.
@@ -38,7 +38,7 @@ If you want to drive it interactively, start the InputAgent in another terminal 
 
 **Visionary** renders a graph and highlights tokens. It does not infer anything on its own.
 
-* The graph comes from your client’s DNA. If the DNA has no routes, there is nothing to draw.
+* The graph comes from your client's DNA. If the DNA has no routes, there is nothing to draw.
 * Highlighting is based on string identity. If the token `"A"` is in your active list, node `A` lights up. If the token `"ab1"` is in your active list, the label pill `ab1` lights up.
 * Logs appear only if you attach a logger.
 
@@ -46,7 +46,7 @@ Everything else is the mechanics of getting the right graph into the browser and
 
 ## Quick reference
 
-In this section, you will see a minimal setup that uses `ClientFlowVisualizer` to start the web UI, load a graph from your client’s DNA, highlight active tokens, and stream logs. The table below describes the main methods you will use and what each one is for.
+In this section, you will see a minimal setup that uses `ClientFlowVisualizer` to start the web UI, load a graph from your client's DNA, highlight active tokens, and stream logs. The table below describes the main methods you will use and what each one is for.
 
 ### Public entry point
 
@@ -238,7 +238,7 @@ viz.push_states([Node("A")])
 
 Each line has a distinct role:
 
-* `attach_logger(...)` connects your client’s logger to the activity terminal at the bottom of the page.
+* `attach_logger(...)` connects your client's logger to the activity terminal at the bottom of the page.
 * `start(...)` launches a local HTTP server and serves the UI.
 * `set_graph_from_dna(...)` publishes the extracted graph to the browser. This is what determines whether the canvas has nodes and edges.
 * `push_states(...)` publishes the current active token snapshot. This affects only highlighting.
@@ -279,7 +279,7 @@ viz.push_states(...tokens...)
 
 Think of `push_states` as "publish the current highlight set." It replaces the previous snapshot with whatever you provide. On the frontend, the page polls `/state` repeatedly and highlights tokens by string identity.
 
-Everything is reduced to a string using `str(x).strip()`. This is why both of the following are equivalent from the UI’s perspective:
+Everything is reduced to a string using `str(x).strip()`. This is why both of the following are equivalent from the UI's perspective:
 
 * `Node("A")`
 * `"A"`
@@ -304,7 +304,7 @@ In the example agent, the local state is held in:
 * `ACTIVE_EDGES`: a set of label tokens such as `{"ab1","bd2"}`
 * `OBJECTS`: the universe of valid node objects, used to partition received tokens into nodes vs labels
 
-The upload handler does two jobs at once. It returns a list of node objects to Summoner’s state resolution layer, and it pushes both nodes and labels into **Visionary** so the UI reflects the full snapshot you care about.
+The upload handler does two jobs at once. It returns a list of node objects to Summoner's state resolution layer, and it pushes both nodes and labels into **Visionary** so the UI reflects the full snapshot you care about.
 
 ```python
 @client.upload_states()

@@ -1153,10 +1153,63 @@ function render() {
 
       const dx = pT.x - pS.x;
       const dy = pT.y - pS.y;
+      const rawLen = hypot(dx, dy);
       const u = unit(dx, dy);
-      if (u.len < 1e-3) continue;
 
       const pad = 2 / VIEW.scale;
+
+      // Self-loop edge (source === target): draw a curved loop above the node.
+      if (rawLen < 1e-3) {
+        const gi = laneInfo.get(e) || { k: 0 };
+        const edgeJ = (typeof gi.k === "number" && isFinite(gi.k)) ? gi.k : 0;
+
+        const liftBase = nodeR + (34 / VIEW.scale);
+        const liftStep = 16 / VIEW.scale;
+        const loopLift = liftBase + Math.abs(edgeJ) * liftStep;
+        const spreadX = (18 / VIEW.scale) + Math.abs(edgeJ) * (8 / VIEW.scale);
+        const ctrlXShift = edgeJ * (10 / VIEW.scale);
+
+        const start = snapPt({ x: pS.x - spreadX, y: pS.y - nodeR - pad });
+        const end   = snapPt({ x: pS.x + spreadX, y: pS.y - nodeR - pad });
+        const ctrl  = snapPt({ x: pS.x + ctrlXShift, y: pS.y - loopLift });
+
+        ctx.lineWidth = BASE_W;
+        ctx.strokeStyle = `rgba(17,24,39,${(BASE_A + 0.08).toFixed(3)})`;
+        ctx.fillStyle = ctx.strokeStyle;
+
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.quadraticCurveTo(ctrl.x, ctrl.y, end.x, end.y);
+        ctx.stroke();
+
+        const tan = quadTangent(start, ctrl, end, 0.985);
+        const headAng = Math.atan2(tan.y, tan.x);
+        drawArrowHead(end.x, end.y, headAng, 12 / VIEW.scale);
+
+        const labels = e.labels || [];
+        if (labels.length > 0) {
+          const tCenter = clamp(0.5 + edgeJ * 0.06, 0.28, 0.72);
+          const rail = (28 / VIEW.scale) + edgeJ * (8 / VIEW.scale);
+          const labelsStart = tCenter - (Math.min(0.22, 0.09 * (labels.length - 1)) / 2);
+
+          for (let i = 0; i < labels.length; i++) {
+            const t = clamp(labelsStart + (labels.length === 1 ? 0 : (Math.min(0.22, 0.09 * (labels.length - 1)) * i / (labels.length - 1))), 0.15, 0.85);
+            const P0 = quadPoint(start, ctrl, end, t);
+            const tanL = quadTangent(start, ctrl, end, t);
+            const nL = topNormal(tanL.x, tanL.y);
+
+            const lab = String(labels[i]);
+            const met = pillMetrics(lab);
+
+            const P = placeCircleGreedy(P0.x + nL.x * rail, P0.y + nL.y * rail, met.r, nL.x, nL.y, tanL.x, tanL.y, obstacles, bounds);
+            const Ps = snapPt(P);
+            drawPill(lab, Ps.x, Ps.y, occupied.has(lab), met);
+            obstacles.push({ x: Ps.x, y: Ps.y, r: met.r });
+          }
+        }
+
+        continue;
+      }
 
       let start = { x: pS.x + u.x * (nodeR + pad), y: pS.y + u.y * (nodeR + pad) };
       let end   = { x: pT.x - u.x * (nodeR + pad), y: pT.y - u.y * (nodeR + pad) };
@@ -1180,7 +1233,7 @@ function render() {
       // Signed lane index (also used for rails + label staggering)
       const edgeJ = (typeof gi.k === "number" && isFinite(gi.k)) ? gi.k : 0;
 
-      // Match the other tool’s feel: 34px step in screen space
+      // Match the other tool's feel: 34px step in screen space
       const spread = 34 / VIEW.scale;
       const curve = edgeJ * spread;
 
