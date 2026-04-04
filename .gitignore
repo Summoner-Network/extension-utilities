@@ -8,8 +8,9 @@ tooling/pdf_tools/
 tooling/code_tools/
 tooling/id_tools/
 tooling/aurora_identity/
-tests/test_crypto_utils
+tests/test_id_tools
 tests/test_aurora_id
+tests/test_aurora_agent
 tests/test_visionary/agent_session_envelope.py
 design.md
 __draft__
