@@ -44,7 +44,7 @@ def test_hubspot_to_dict_roundtrip_from_curl_parse(compiler):
     curl = r"""
     curl --request GET \
       --url 'https://api.hubapi.com/crm/v3/objects/companies?limit=10' \
-      --header 'Authorization: Bearer $HUBSPOT_TOKEN'
+      --header 'Authorization: Bearer $HUBSPOT_ACCESS_TOKEN'
     """.strip()
 
     tool = compiler.parse(curl, description="HubSpot: List companies")

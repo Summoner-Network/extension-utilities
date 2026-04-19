@@ -45,9 +45,8 @@ DELETE /webhooks/DeleteWebhook
 
 @pytest.mark.asyncio
 async def test_heyreach_gpt_parse_builds_tool(compiler):
-    # Skip at runtime (after fixtures ran), not at import time.
-    if getattr(compiler, "_openai_client", None) is None:
-        pytest.skip("OPENAI_API_KEY not set (compiler has no OpenAI client)")
+    if not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set")
 
     tool = await compiler.gpt_parse(
         HEYREACH_DOCS,
@@ -71,4 +70,3 @@ async def test_heyreach_gpt_parse_builds_tool(compiler):
     # Must be templated (no raw secrets)
     x_api_key_val = headers["x-api-key"]
     assert "{{env:" in x_api_key_val, f"X-API-KEY should be templated, got: {x_api_key_val}"
-

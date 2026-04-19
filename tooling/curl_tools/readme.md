@@ -30,6 +30,13 @@ pytest -q tests/test_curl_tools/test_hubspot_*
 pytest -q tests/test_curl_tools/test_twilio_*
 ```
 
+For the OpenAI bootstrap path specifically, see:
+
+```bash
+pytest -q tests/test_curl_tools/test_openai_parse_curl.py
+pytest -q tests/test_curl_tools/test_openai_gpt_parse_bootstrap.py
+```
+
 Integration tests (live API calls) are gated behind explicit flags and secrets:
 
 ```bash
@@ -76,6 +83,16 @@ from tooling.curl_tools import (
 | `gpt_parse(docs, ...)`        | Ask OpenAI to extract a request blueprint from docs/snippets          | Enforced by token + cost ceilings via `gpt_guardrails`         |
 | `request_schema_from_dict(d)` | Rehydrate a tool spec saved via `tool.to_dict()`                      | Deterministic re-creation of a previously parsed tool          |
 | `set_budget(...)`             | Adjust GPT parse ceilings (tokens/cost)                               | Affects `gpt_parse` only                                       |
+
+### `CurlToolCompiler` constructor args most relevant to GPT parsing
+
+| Argument | Default | What it affects |
+| -------- | ------- | --------------- |
+| `openai_api_key` | `None` | Overrides `OPENAI_API_KEY` for `gpt_parse(...)` |
+| `validate_model_name` | `True` | Best-effort validation of `model_name` against OpenAI `/v1/models` |
+| `max_chat_input_tokens` | `600` | Prompt token ceiling checked before the OpenAI request |
+| `max_chat_output_tokens` | `1200` | Output token budget used for both the request and worst-case cost estimate |
+| `default_cost_limit` | `None` | Default fallback for `gpt_parse(cost_limit=...)` |
 
 ### `HttpTool` methods at a glance
 
@@ -141,7 +158,7 @@ compiler = CurlToolCompiler(secrets=SecretResolver(auto_dotenv=True))
 curl_text = r'''
 curl --request GET \
   --url "https://api.hubapi.com/crm/v3/objects/companies?limit={{limit}}" \
-  --header "Authorization: Bearer $HUBSPOT_TOKEN"
+  --header "Authorization: Bearer $HUBSPOT_ACCESS_TOKEN"
 '''
 
 tool = compiler.parse(curl_text, description="HubSpot: list companies")
@@ -159,7 +176,7 @@ Example:
 tool = compiler.request_schema(
     method="GET",
     url="https://api.hubapi.com/crm/v3/objects/companies",
-    headers={"Authorization": "Bearer {{env:HUBSPOT_TOKEN}}"},
+    headers={"Authorization": "Bearer {{env:HUBSPOT_ACCESS_TOKEN}}"},
     params={"limit": "{{limit}}"},
     body=None,
     body_mode="json",
@@ -174,6 +191,8 @@ assert report.status_code == 200
 
 `gpt_parse(...)` is intended for "docs-first" tool construction: you paste docs or a mixed docs + curl snippet, and the model emits a structured `CurlToolBlueprint` that your compiler turns into an `HttpTool`.
 
+Internally, `gpt_parse` now bootstraps its OpenAI call through the same `curl` -> `HttpTool` path used elsewhere in this module, instead of relying on the OpenAI Python SDK parser helper. The compiler builds an internal OpenAI `/v1/responses` tool from a cURL template, submits a strict JSON-schema request, then validates the returned `output_text` against `CurlToolBlueprint`.
+
 `gpt_parse` is guarded by:
 
 * prompt token ceiling (`max_chat_input_tokens`)
@@ -181,6 +200,8 @@ assert report.status_code == 200
 * optional `cost_limit`
 
 This guardrail logic is implemented using `tooling.gpt_guardrails`.
+
+When `validate_model_name=True` (the default), `gpt_parse` also attempts a best-effort model-name check against OpenAI `/v1/models`. If that lookup fails, parsing still proceeds; if it succeeds and your `model_name` is absent, `gpt_parse` raises `ValueError`.
 
 Example:
 
@@ -203,6 +224,8 @@ The GPT prompt enforces these constraints:
 * preserve `$TOKEN` or `${TOKEN}` as `{{env:TOKEN}}`
 * do not guess endpoints or parameters not present in the docs
 * prefer minimal correct output over speculative completeness
+
+At response-handling time, `gpt_parse` also treats OpenAI refusals or incomplete structured-output responses as explicit errors rather than silently returning a partial tool.
 
 ## Templating model
 
@@ -285,7 +308,7 @@ The repo uses explicit "live test" flags to prevent accidental network calls:
 
 Tests should also skip cleanly when required secrets are missing, for example:
 
-* `HUBSPOT_TOKEN`
+* `HUBSPOT_ACCESS_TOKEN`
 * `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (depending on your tests)
 * `HEYREACH_API_KEY`
 
@@ -301,7 +324,10 @@ Then, inside the test, skip again if required tokens are missing.
 ## Troubleshooting
 
 * **My GPT parse test is skipped**
-  `gpt_parse` requires `OPENAI_API_KEY`. If it is missing, tests should skip via `pytest.mark.skipif(...)`.
+  `gpt_parse` needs an OpenAI API key, either from `OPENAI_API_KEY` or from `CurlToolCompiler(openai_api_key=...)`. In this repo, the GPT parse tests usually skip when `OPENAI_API_KEY` is missing.
+
+* **`gpt_parse` says my model name is invalid**
+  By default, `CurlToolCompiler(validate_model_name=True)` performs a best-effort lookup against OpenAI `/v1/models`. Use a valid model id, or disable that preflight check with `validate_model_name=False` if you deliberately want to skip local validation.
 
 * **`Using pytest.skip outside of a test`**
   If you skip at import time, use `allow_module_level=True`:

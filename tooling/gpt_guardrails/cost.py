@@ -171,13 +171,17 @@ class Usage:
 
 def get_usage_from_response(response: Any) -> Optional[Usage]:
     """
-    Attempt to extract a unified Usage object from an OpenAI SDK response.
+    Attempt to extract a unified Usage object from an OpenAI response.
     Works for:
-      - Chat Completions (response.usage has prompt/completion/total)
-      - Responses API (usage may expose input/output/total)
+      - Chat Completions SDK objects (response.usage has prompt/completion/total)
+      - Responses API SDK objects (usage may expose input/output/total)
+      - Raw JSON dictionaries returned by direct HTTP calls
     Returns None if usage isn't available.
     """
-    usage_obj = getattr(response, "usage", None)
+    if isinstance(response, dict):
+        usage_obj = response.get("usage")
+    else:
+        usage_obj = getattr(response, "usage", None)
     if usage_obj is None:
         return None
 

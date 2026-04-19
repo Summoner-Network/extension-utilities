@@ -2,6 +2,7 @@ core/
 .DS_Store
 logs/
 *.old
+*.backup.*
 test_server_config.json 
 test_server.py
 tooling/pdf_tools/

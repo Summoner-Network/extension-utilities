@@ -16,8 +16,6 @@ from urllib.parse import parse_qsl
 
 import httpx
 
-import openai
-from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from pprint import pprint
 
@@ -40,6 +38,26 @@ FormBody = Union[dict[str, Any], FormPairs]
 JsonObject = Dict[str, Any]
 JsonArray = List[Any]
 ToolBody = Union[str, JsonObject, JsonArray]
+
+
+_OPENAI_RESPONSES_CREATE_CURL = (
+    "curl https://api.openai.com/v1/responses "
+    '-H "Authorization: Bearer $OPENAI_API_KEY" '
+    '-H "Content-Type: application/json" '
+    "-d '{}'"
+)
+
+_OPENAI_MODELS_LIST_CURL = (
+    "curl https://api.openai.com/v1/models "
+    '-H "Authorization: Bearer $OPENAI_API_KEY"'
+)
+
+_OPENAI_BLUEPRINT_SCHEMA_NAME = "curl_tool_blueprint"
+
+
+@dataclass(frozen=True)
+class _LiteralTemplateString:
+    value: str
 
 
 
@@ -121,6 +139,8 @@ def _render_template_any(
     inputs: Mapping[str, Any],
     secrets: SecretResolver,
 ) -> Any:
+    if isinstance(obj, _LiteralTemplateString):
+        return obj.value
     if isinstance(obj, str):
         return _render_template_str(obj, inputs=inputs, secrets=secrets)
     if isinstance(obj, list):
@@ -801,6 +821,100 @@ class CurlToolBlueprint(BaseModel):
     templating_notes: Optional[str] = None
 
 
+def _resolve_json_schema_ref(*, root: dict[str, Any], ref: str) -> Any:
+    if not ref.startswith("#/"):
+        raise ValueError(f"Only local JSON schema refs are supported, got: {ref}")
+
+    node: Any = root
+    for segment in ref[2:].split("/"):
+        key = segment.replace("~1", "/").replace("~0", "~")
+        if not isinstance(node, dict) or key not in node:
+            raise KeyError(f"Could not resolve JSON schema ref: {ref}")
+        node = node[key]
+    return node
+
+
+def _ensure_openai_strict_json_schema(
+    json_schema: object,
+    *,
+    path: tuple[str, ...],
+    root: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Pydantic's JSON schema is close to what OpenAI Structured Outputs expects,
+    but a few tweaks are needed to fully match the "strict" schema contract.
+    """
+    if not isinstance(json_schema, dict):
+        raise TypeError(f"Expected a JSON schema dict at {path}, got: {type(json_schema).__name__}")
+
+    defs = json_schema.get("$defs")
+    if isinstance(defs, dict):
+        for def_name, def_schema in defs.items():
+            _ensure_openai_strict_json_schema(def_schema, path=(*path, "$defs", def_name), root=root)
+
+    definitions = json_schema.get("definitions")
+    if isinstance(definitions, dict):
+        for def_name, def_schema in definitions.items():
+            _ensure_openai_strict_json_schema(def_schema, path=(*path, "definitions", def_name), root=root)
+
+    if json_schema.get("type") == "object" and "additionalProperties" not in json_schema:
+        json_schema["additionalProperties"] = False
+
+    properties = json_schema.get("properties")
+    if isinstance(properties, dict):
+        json_schema["required"] = list(properties.keys())
+        json_schema["properties"] = {
+            key: _ensure_openai_strict_json_schema(prop_schema, path=(*path, "properties", key), root=root)
+            for key, prop_schema in properties.items()
+        }
+
+    items = json_schema.get("items")
+    if isinstance(items, dict):
+        json_schema["items"] = _ensure_openai_strict_json_schema(items, path=(*path, "items"), root=root)
+
+    any_of = json_schema.get("anyOf")
+    if isinstance(any_of, list):
+        json_schema["anyOf"] = [
+            _ensure_openai_strict_json_schema(entry, path=(*path, "anyOf", str(i)), root=root)
+            for i, entry in enumerate(any_of)
+        ]
+
+    all_of = json_schema.get("allOf")
+    if isinstance(all_of, list):
+        if len(all_of) == 1:
+            json_schema.update(
+                _ensure_openai_strict_json_schema(all_of[0], path=(*path, "allOf", "0"), root=root)
+            )
+            json_schema.pop("allOf", None)
+        else:
+            json_schema["allOf"] = [
+                _ensure_openai_strict_json_schema(entry, path=(*path, "allOf", str(i)), root=root)
+                for i, entry in enumerate(all_of)
+            ]
+
+    if json_schema.get("default", object()) is None:
+        json_schema.pop("default", None)
+
+    ref = json_schema.get("$ref")
+    if isinstance(ref, str) and len(json_schema) > 1:
+        resolved = _resolve_json_schema_ref(root=root, ref=ref)
+        if not isinstance(resolved, dict):
+            raise TypeError(f"Expected $ref {ref} to resolve to a dict")
+        json_schema.update({**resolved, **json_schema})
+        json_schema.pop("$ref", None)
+        return _ensure_openai_strict_json_schema(json_schema, path=path, root=root)
+
+    return json_schema
+
+
+def _to_openai_strict_json_schema(model: Type[BaseModel]) -> dict[str, Any]:
+    schema = model.model_json_schema()
+    return _ensure_openai_strict_json_schema(schema, path=(), root=schema)
+
+
+_CURL_TOOL_BLUEPRINT_JSON_SCHEMA = _to_openai_strict_json_schema(CurlToolBlueprint)
+
+
 def _redact_probable_secrets(text: str) -> str:
     """
     Best-effort redaction to reduce risk of sending live secrets to GPT.
@@ -849,23 +963,30 @@ class CurlToolCompiler:
             load_dotenv(dotenv_path=dotenv_path, override=dotenv_override)
 
         self.secrets = secrets or SecretResolver(auto_dotenv=False)
-
-        self._openai_client: Optional[AsyncOpenAI]
-        self._model_ids: list[str]
+        self._model_ids: list[str] = []
 
         api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        self._openai_secrets = SecretResolver(
+            mapping={"OPENAI_API_KEY": api_key} if api_key else None,
+            fallback=self.secrets.get,
+            auto_dotenv=False,
+        )
+
         if not api_key:
-            self._openai_client = None
-            self._model_ids = []
+            self._openai_responses_tool: Optional[HttpTool] = None
+            self._openai_models_tool: Optional[HttpTool] = None
         else:
-            self._openai_client = AsyncOpenAI(api_key=api_key)
-            self._model_ids = []
-            if validate_model_name:
-                try:
-                    self._model_ids = [m.id for m in openai.models.list().data]
-                except Exception:
-                    # Fail-open: do not block gpt_parse if model listing fails
-                    self._model_ids = []
+            # Dogfood the compiler's own cURL parser for OpenAI calls too.
+            self._openai_responses_tool = self._bootstrap_http_tool_from_curl(
+                _OPENAI_RESPONSES_CREATE_CURL,
+                description="OpenAI: create response",
+                secrets=self._openai_secrets,
+            )
+            self._openai_models_tool = self._bootstrap_http_tool_from_curl(
+                _OPENAI_MODELS_LIST_CURL,
+                description="OpenAI: list models",
+                secrets=self._openai_secrets,
+            )
 
         self.max_chat_input_tokens = max_chat_input_tokens
         self.max_chat_output_tokens = max_chat_output_tokens
@@ -899,6 +1020,18 @@ class CurlToolCompiler:
         spec.input_model = input_model
         spec.output_model = output_model
         return HttpTool(spec, secrets=self.secrets)
+
+    def _bootstrap_http_tool_from_curl(
+        self,
+        curl_text: str,
+        *,
+        description: Optional[str] = None,
+        secrets: Optional[SecretResolver] = None,
+    ) -> HttpTool:
+        tool = self.parse(curl_text, description=description)
+        if secrets is not None:
+            tool.secrets = secrets
+        return tool
 
     def request_schema(
         self,
@@ -964,6 +1097,125 @@ class CurlToolCompiler:
             description=dd.get("description"),
         )
 
+    async def _load_openai_model_ids(self) -> None:
+        if self._openai_models_tool is None or self._model_ids:
+            return
+
+        try:
+            report = await self._openai_models_tool.call()
+        except Exception:
+            # Fail-open: do not block gpt_parse if model listing fails
+            return
+
+        if not report.ok or not isinstance(report.response_json, dict):
+            return
+
+        data = report.response_json.get("data")
+        if not isinstance(data, list):
+            return
+
+        self._model_ids = [
+            item["id"]
+            for item in data
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
+
+    def _clone_tool_with_body(self, base_tool: HttpTool, *, body: Optional[Any]) -> HttpTool:
+        auth_spec = None
+        if base_tool.spec.auth is not None:
+            auth_spec = dataclasses.replace(base_tool.spec.auth)
+
+        spec = dataclasses.replace(
+            base_tool.spec,
+            headers=dict(base_tool.spec.headers or {}),
+            params=dict(base_tool.spec.params or {}),
+            body=body,
+            auth=auth_spec,
+        )
+        return HttpTool(spec, secrets=base_tool.secrets)
+
+    def _build_openai_structured_output_payload(
+        self,
+        *,
+        model_name: str,
+        messages: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        payload_messages: list[dict[str, Any]] = []
+        for message in messages:
+            payload_message: dict[str, Any] = dict(message)
+            content = payload_message.get("content")
+            if isinstance(content, str):
+                payload_message["content"] = _LiteralTemplateString(content)
+            payload_messages.append(payload_message)
+
+        return {
+            "model": model_name,
+            "input": payload_messages,
+            "max_output_tokens": self.max_chat_output_tokens,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": _OPENAI_BLUEPRINT_SCHEMA_NAME,
+                    "schema": _CURL_TOOL_BLUEPRINT_JSON_SCHEMA,
+                    "strict": True,
+                }
+            },
+        }
+
+    def _extract_openai_error_message(self, report: ToolCallReport) -> str:
+        if isinstance(report.response_json, dict):
+            error = report.response_json.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+                if isinstance(message, str) and message:
+                    return message
+        if report.response_text:
+            return report.response_text
+        return "Unknown OpenAI error"
+
+    def _extract_openai_output_text(self, response_json: Mapping[str, Any]) -> str:
+        status = response_json.get("status")
+        if status == "incomplete":
+            reason = None
+            incomplete_details = response_json.get("incomplete_details")
+            if isinstance(incomplete_details, dict):
+                raw_reason = incomplete_details.get("reason")
+                if isinstance(raw_reason, str):
+                    reason = raw_reason
+            if reason:
+                raise RuntimeError(f"OpenAI structured output response was incomplete: {reason}")
+            raise RuntimeError("OpenAI structured output response was incomplete.")
+
+        output = response_json.get("output")
+        if not isinstance(output, list):
+            raise RuntimeError("OpenAI response did not include an output array.")
+
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+
+            for chunk in content:
+                if not isinstance(chunk, dict):
+                    continue
+
+                chunk_type = chunk.get("type")
+                if chunk_type == "refusal":
+                    refusal = chunk.get("refusal")
+                    if isinstance(refusal, str) and refusal:
+                        raise RuntimeError(f"OpenAI structured output request was refused: {refusal}")
+                    raise RuntimeError("OpenAI structured output request was refused.")
+
+                if chunk_type == "output_text":
+                    text = chunk.get("text")
+                    if isinstance(text, str):
+                        return text
+
+        raise RuntimeError("OpenAI response did not include output_text content.")
+
     async def gpt_parse(
         self,
         docs: str,
@@ -972,8 +1224,11 @@ class CurlToolCompiler:
         cost_limit: Optional[float] = None,
         debug: bool = False,
     ) -> HttpTool:
-        if self._openai_client is None:
+        if self._openai_responses_tool is None:
             raise RuntimeError("OPENAI_API_KEY not configured, cannot use gpt_parse().")
+
+        if self.validate_model_name:
+            await self._load_openai_model_ids()
 
         if self.validate_model_name and self._model_ids:
             if model_name not in self._model_ids:
@@ -1008,20 +1263,33 @@ class CurlToolCompiler:
         if effective_cost_limit is not None and est_cost > effective_cost_limit:
             raise ValueError("gpt_parse: estimated cost exceeds limit")
 
-        response = await self._openai_client.responses.parse(
-            input=messages,
-            model=model_name,
-            max_output_tokens=self.max_chat_output_tokens,
-            text_format=CurlToolBlueprint,
+        request_payload = self._build_openai_structured_output_payload(
+            model_name=model_name,
+            messages=messages,
         )
+        request_tool = self._clone_tool_with_body(self._openai_responses_tool, body=request_payload)
+        report = await request_tool.call()
 
-        usage = get_usage_from_response(response)
+        if not report.ok:
+            raise RuntimeError(
+                f"OpenAI request failed with status {report.status_code}: "
+                f"{self._extract_openai_error_message(report)}"
+            )
+
+        if not isinstance(report.response_json, dict):
+            raise RuntimeError("OpenAI response was not valid JSON.")
+
+        usage = get_usage_from_response(report.response_json)
         if usage and debug:
             pprint(usage.to_dict())
             act_cost = actual_chat_request_cost(model_name, usage.prompt_tokens, usage.completion_tokens)
             print(f"\033[95m[gpt_parse] Actual cost: ${act_cost:.6f}\033[0m")
 
-        blueprint: CurlToolBlueprint = response.output[0].content[0].parsed
+        output_text = self._extract_openai_output_text(report.response_json)
+        try:
+            blueprint = CurlToolBlueprint.model_validate_json(output_text)
+        except ValidationError as exc:
+            raise RuntimeError("OpenAI structured output did not match CurlToolBlueprint.") from exc
 
         # Convert KV lists to dicts (last wins)
         headers_dict: dict[str, str] = {}
@@ -1111,4 +1379,3 @@ class CurlToolCompiler:
             "Docs:\n"
             f"{docs}\n"
         )
-
