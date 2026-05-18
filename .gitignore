@@ -15,6 +15,7 @@ tests/test_aurora_agent
 tests/test_visionary/agent_session_envelope.py
 design.md
 __draft__
+.vscode
 
 
 # Byte-compiled / optimized / DLL files

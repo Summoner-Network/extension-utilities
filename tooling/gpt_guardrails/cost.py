@@ -1,5 +1,6 @@
 from typing import Optional, Any
 from dataclasses import dataclass
+import re
 import tiktoken
 
 def count_chat_tokens(
@@ -46,25 +47,79 @@ def count_chat_tokens(
 
 
 
-# Per-1k token prices: {"prompt": <USD>, "completion": <USD>}
+# Per-1k token prices for standard processing: {"prompt": <USD>, "completion": <USD>}
 PRICING: dict[str, dict[str, float]] = {
+    # Current flagship / reasoning / specialized models
+    "gpt-5.5":              {"prompt": 0.00500, "completion": 0.03000},
+    "gpt-5.5-pro":          {"prompt": 0.03000, "completion": 0.18000},
+
+    "gpt-5.4":              {"prompt": 0.00250, "completion": 0.01500},
+    "gpt-5.4-mini":         {"prompt": 0.00075, "completion": 0.00450},
+    "gpt-5.4-nano":         {"prompt": 0.00020, "completion": 0.00125},
+    "gpt-5.4-pro":          {"prompt": 0.03000, "completion": 0.18000},
+
+    "gpt-5.3-codex":        {"prompt": 0.00175, "completion": 0.01400},
+
+    "chat-latest":          {"prompt": 0.00500, "completion": 0.03000},
+
+    "gpt-4.1":              {"prompt": 0.00200, "completion": 0.00800},
+    "gpt-4.1-mini":         {"prompt": 0.00040, "completion": 0.00160},
+    "gpt-4.1-nano":         {"prompt": 0.00010, "completion": 0.00040},
+
+    "gpt-4o":               {"prompt": 0.00250, "completion": 0.01000},
+    "gpt-4o-mini":          {"prompt": 0.00015, "completion": 0.00060},
+
+    "o3-pro":               {"prompt": 0.02000, "completion": 0.08000},
+    "o3":                   {"prompt": 0.00200, "completion": 0.00800},
+    "o3-deep-research":     {"prompt": 0.01000, "completion": 0.04000},
+    
+    "o4-mini":              {"prompt": 0.00110, "completion": 0.00440},
+    "o4-mini-deep-research":{"prompt": 0.00200, "completion": 0.00800},
+
+    # Older GPT-5 aliases still seen in configs / code paths
+    "gpt-5":                {"prompt": 0.00125, "completion": 0.01000},
+    "gpt-5-mini":           {"prompt": 0.00025, "completion": 0.00200},
+    "gpt-5-nano":           {"prompt": 0.00005, "completion": 0.00040},
+
     # Historical / legacy
-    "gpt-3.5-turbo":     {"prompt": 0.0005,  "completion": 0.0015},
-    "gpt-3.5-turbo-16k": {"prompt": 0.003,   "completion": 0.004},
-    "gpt-4.1":           {"prompt": 0.002,   "completion": 0.008},
-    "gpt-4.1-mini":      {"prompt": 0.0004,  "completion": 0.0016},
-    "o3":                {"prompt": 0.002,   "completion": 0.008},
-    "o4-mini":           {"prompt": 0.0011,  "completion": 0.0044},
-
-    # 4o family
-    "gpt-4o":            {"prompt": 0.0050,  "completion": 0.0200},
-    "gpt-4o-mini":       {"prompt": 0.00015, "completion": 0.00060},
-
-    # 5 family (example numbers; keep synced with docs)
-    "gpt-5":             {"prompt": 0.00125, "completion": 0.01000},
-    "gpt-5-mini":        {"prompt": 0.00025, "completion": 0.00200},
-    "gpt-5-nano":        {"prompt": 0.00005, "completion": 0.00040},
+    "gpt-3.5-turbo":        {"prompt": 0.00050, "completion": 0.00150},
+    "gpt-3.5-turbo-16k":    {"prompt": 0.00300, "completion": 0.00400},
 }
+
+_DATE_SUFFIX_RE = re.compile(r"-(?:20\d{2}-\d{2}-\d{2}|latest)$")
+_GPT5_FAMILY_RE = re.compile(r"^(gpt-5)(?:\.\d+)*(?:-(mini|nano))?$")
+
+
+def resolve_chat_pricing_model(model_name: str) -> Optional[str]:
+    """
+    Resolve a model name to the pricing table key used by this local guardrails module.
+
+    This supports:
+    - exact matches already present in PRICING
+    - dated model IDs such as `gpt-4o-mini-2024-07-18`
+    - versioned GPT-5 family names such as `gpt-5.4-mini`, which can fall
+      back to the closest base-family entry when an exact row is unavailable
+    """
+    normalized = (model_name or "").strip()
+    if not normalized:
+        return None
+    if normalized in PRICING:
+        return normalized
+
+    without_date_suffix = _DATE_SUFFIX_RE.sub("", normalized)
+    if without_date_suffix in PRICING:
+        return without_date_suffix
+
+    family_match = _GPT5_FAMILY_RE.fullmatch(without_date_suffix)
+    if family_match:
+        size = family_match.group(2)
+        if size == "mini":
+            return "gpt-5-mini"
+        if size == "nano":
+            return "gpt-5-nano"
+        return "gpt-5"
+
+    return None
 
 
 def estimate_chat_request_cost(
@@ -76,7 +131,8 @@ def estimate_chat_request_cost(
     Return the *estimated* cost (USD) if the model were to
     use prompt_tokens and then produce max_completion_tokens.
     """
-    rates = PRICING.get(model_name)
+    resolved_model = resolve_chat_pricing_model(model_name)
+    rates = PRICING.get(resolved_model) if resolved_model else None
     if not rates:
         raise ValueError(f"No pricing info for model '{model_name}'")
     return (
@@ -94,13 +150,44 @@ def actual_chat_request_cost(
     Return the *actual* cost (USD) once you know how many
     completion_tokens were consumed.
     """
-    rates = PRICING.get(model_name)
+    resolved_model = resolve_chat_pricing_model(model_name)
+    rates = PRICING.get(resolved_model) if resolved_model else None
     if not rates:
         raise ValueError(f"No pricing info for model '{model_name}'")
     return (
         (prompt_tokens / 1_000) * rates["prompt"]
         + (completion_tokens / 1_000) * rates["completion"]
     )
+
+
+def safe_estimate_chat_request_cost(
+    model_name: str,
+    prompt_tokens: int,
+    max_completion_tokens: int,
+) -> Optional[float]:
+    """
+    Best-effort estimate that returns None instead of raising when pricing
+    is unknown for the model.
+    """
+    try:
+        return estimate_chat_request_cost(model_name, prompt_tokens, max_completion_tokens)
+    except ValueError:
+        return None
+
+
+def safe_actual_chat_request_cost(
+    model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> Optional[float]:
+    """
+    Best-effort actual cost that returns None instead of raising when pricing
+    is unknown for the model.
+    """
+    try:
+        return actual_chat_request_cost(model_name, prompt_tokens, completion_tokens)
+    except ValueError:
+        return None
 
 
 # Needed for newer openai models (gpt-5 family)
