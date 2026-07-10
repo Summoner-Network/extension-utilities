@@ -32,3 +32,8 @@ def has_env() -> bool:
               "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
               "HEYREACH_API_KEY", "HUBSPOT_ACCESS_TOKEN"]
     return all(os.getenv(k) for k in needed)
+
+@pytest.fixture(scope="session")
+def has_twilio_env() -> bool:
+    needed = ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"]
+    return all(os.getenv(k) for k in needed)

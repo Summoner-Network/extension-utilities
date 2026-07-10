@@ -51,7 +51,7 @@ def test_twilio_send_sms_live(compiler, has_twilio_env):
 
     report = asyncio.run(tool.call({"to": to_number, "body": body}))
 
-    assert report.status_code in (200, 201)
+    assert report.status_code in (200, 201), report.response_json
     assert report.ok is True
     assert report.response_json is not None
     assert "sid" in report.response_json
