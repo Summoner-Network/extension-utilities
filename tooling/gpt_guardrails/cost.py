@@ -53,6 +53,11 @@ PRICING: dict[str, dict[str, float]] = {
     "gpt-5.5":              {"prompt": 0.00500, "completion": 0.03000},
     "gpt-5.5-pro":          {"prompt": 0.03000, "completion": 0.18000},
 
+    "gpt-5.6":              {"prompt": 0.00500, "completion": 0.03000},
+    "gpt-5.6-sol":          {"prompt": 0.00500, "completion": 0.03000},
+    "gpt-5.6-terra":        {"prompt": 0.00200, "completion": 0.01200},
+    "gpt-5.6-luna":         {"prompt": 0.00020, "completion": 0.00120},
+
     "gpt-5.4":              {"prompt": 0.00250, "completion": 0.01500},
     "gpt-5.4-mini":         {"prompt": 0.00075, "completion": 0.00450},
     "gpt-5.4-nano":         {"prompt": 0.00020, "completion": 0.00125},
@@ -87,7 +92,7 @@ PRICING: dict[str, dict[str, float]] = {
 }
 
 _DATE_SUFFIX_RE = re.compile(r"-(?:20\d{2}-\d{2}-\d{2}|latest)$")
-_GPT5_FAMILY_RE = re.compile(r"^(gpt-5)(?:\.\d+)*(?:-(mini|nano))?$")
+_GPT5_FAMILY_RE = re.compile(r"^(gpt-5)(?:\.\d+)*(?:-(mini|nano|sol|terra|luna))?$")
 
 
 def resolve_chat_pricing_model(model_name: str) -> Optional[str]:
@@ -117,6 +122,10 @@ def resolve_chat_pricing_model(model_name: str) -> Optional[str]:
             return "gpt-5-mini"
         if size == "nano":
             return "gpt-5-nano"
+        if size in {"sol", "terra", "luna"}:
+            exact_key = f"gpt-5.6-{size}"
+            if exact_key in PRICING:
+                return exact_key
         return "gpt-5"
 
     return None

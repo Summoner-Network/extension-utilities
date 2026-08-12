@@ -23,6 +23,24 @@ class CostPricingResolutionTests(unittest.TestCase):
             (1.2 * 0.00075) + (0.8 * 0.0045),
         )
 
+    def test_current_gpt56_pricing_is_resolved_exactly(self) -> None:
+        self.assertEqual(resolve_chat_pricing_model("gpt-5.6"), "gpt-5.6")
+        self.assertEqual(resolve_chat_pricing_model("gpt-5.6-sol"), "gpt-5.6-sol")
+        self.assertEqual(resolve_chat_pricing_model("gpt-5.6-terra"), "gpt-5.6-terra")
+        self.assertEqual(resolve_chat_pricing_model("gpt-5.6-luna"), "gpt-5.6-luna")
+        self.assertAlmostEqual(
+            estimate_chat_request_cost("gpt-5.6-sol", 1000, 2000),
+            0.005 + (2 * 0.03),
+        )
+        self.assertAlmostEqual(
+            estimate_chat_request_cost("gpt-5.6-terra", 1000, 2000),
+            0.002 + (2 * 0.012),
+        )
+        self.assertAlmostEqual(
+            estimate_chat_request_cost("gpt-5.6-luna", 1000, 2000),
+            0.0002 + (2 * 0.0012),
+        )
+
     def test_safe_cost_helpers_return_none_for_unknown_model(self) -> None:
         self.assertIsNone(safe_estimate_chat_request_cost("totally-unknown-model", 1000, 1000))
         self.assertIsNone(safe_actual_chat_request_cost("totally-unknown-model", 1000, 1000))
